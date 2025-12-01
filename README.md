@@ -11,7 +11,7 @@ The project is intentionally minimalistic and oriented toward automation, portab
 
 - Implement the scraper logic in `api/scrape_hub.js`. (done)
 - Map extracted content to your internal JSON schema. (done)
-- Build S3 upload utility in `scripts/run_scrape_batch.js`.
+- Build S3 upload utility in `scripts/run_scrape_batch.js`. (done)
 - Generate datasets and upload them.
 - Validate quality and standardize metadata.
 - Run embeddings to create your Knowledge Base.
