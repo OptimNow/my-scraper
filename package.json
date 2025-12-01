@@ -1,0 +1,14 @@
+{
+  "name": "my-scraper",
+  "version": "0.1.0",
+  "main": "api/scrape_hub.js",
+  "scripts": {
+    "start": "vercel dev",
+    "scrape": "node scripts/run_scrape_batch.js"
+  },
+  "dependencies": {
+    "node-fetch": "^3.x",
+    "jsdom": "^22.x",
+    "aws-sdk": "^2.x"   // ou @aws-sdk/client-s3 si version v3
+  }
+}
