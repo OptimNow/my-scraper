@@ -1,0 +1,9 @@
+{
+  "version": 2,
+  "builds": [
+    { "src": "api/scrape_hub.js", "use": "@vercel/node" }
+  ],
+  "routes": [
+    { "src": "/api/scrape_hub", "dest": "api/scrape_hub.js" }
+  ]
+}
