@@ -1,0 +1,20 @@
+{
+  "id": "...",
+  "title": "...",
+  "author": "...",
+  "service_category": "...",
+  "cloud_provider": "...",
+  "service_name": "...",
+  "inefficiency_type": "...",
+  "explanation": "...",
+  "billing_model": "...",
+  "detection_signals": [],
+  "remediation_actions": [],
+  "documentation_links": [],
+  "tags": [],
+  "source": {
+      "url": "...",
+      "origin": "pointfive_cloud_efficiency_hub"
+  },
+  "scraped_at": "2025-02-..."
+}
