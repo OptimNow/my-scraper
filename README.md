@@ -5,6 +5,17 @@ The long-term goal is to **construct a Knowledge Base (KB)** using the scraped J
 
 The project is intentionally minimalistic and oriented toward automation, portability, and one-shot execution.
 
+
+
+## 0. Next Steps
+
+- Implement the scraper logic in `api/scrape_hub.js`. (done)
+- Map extracted content to your internal JSON schema. (done)
+- Build S3 upload utility in `scripts/run_scrape_batch.js`.
+- Generate datasets and upload them.
+- Validate quality and standardize metadata.
+- Run embeddings to create your Knowledge Base.
+
 ------
 
 ## 1. Objectives
@@ -187,18 +198,9 @@ Run batch scraper locally:
 npm run scrape
 ```
 
-------
 
-## 8. Next Steps
 
-- Implement the scraper logic in `api/scrape_hub.js`.
-- Map extracted content to your internal JSON schema.
-- Build S3 upload utility in `scripts/run_scrape_batch.js`.
-- Generate datasets and upload them.
-- Validate quality and standardize metadata.
-- Run embeddings to create your Knowledge Base.
-
-# 9. End-to-End Workflow (from scraping to KB)
+# 8. End-to-End Workflow (from scraping to KB)
 
 This is the practical “how the whole pipeline works” flow:
 
@@ -253,7 +255,7 @@ This is the practical “how the whole pipeline works” flow:
 
 ------
 
-# 10. Attention Points, Pitfalls, and Best Practices
+# 9. Attention Points, Pitfalls, and Best Practices
 
 ### A. Technical
 

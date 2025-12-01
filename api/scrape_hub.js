@@ -1,231 +1,331 @@
 // api/scrape_hub.js
 //
-// Vercel Node function that scrapes PointFive Cloud Efficiency Hub
-// and returns normalized JSON entries.
+// Vercel serverless function that:
+//  - Scrapes hub.pointfive.co/hub to discover inefficiency URLs
+//  - Scrapes each inefficiency detail page
+//  - Returns normalized JSON entries
 //
-// Important:
-//  - Uses native fetch (Node 18+ on Vercel)
-//  - Uses JSDOM to parse HTML
-//
+// Usage examples:
+//   /api/scrape_hub                 -> scrape index, first N entries
+//   /api/scrape_hub?limit=5         -> scrape first 5 entries
+//   /api/scrape_hub?url=...         -> scrape a single inefficiency URL
 
 const { JSDOM } = require("jsdom");
-const { URL } = require("url");
 
 const BASE_URL = "https://hub.pointfive.co";
 
+// Section titles we expect on detail pages
+const SECTION_TITLES = [
+  "Explanation",
+  "Relevant Billing Model",
+  "Detection",
+  "Remediation",
+  "Relevant Documentation"
+];
+
 /**
- * Helper to fetch and parse HTML into a DOM
+ * Fetch HTML and return a JSDOM document.
  */
-async function fetchHtml(url) {
-  const resp = await fetch(url);
+async function fetchDocument(url) {
+  const resp = await fetch(url, {
+    headers: {
+      // You can customize the user agent string if needed
+      "User-Agent": "my-scraper/0.1 (+https://example.com)"
+    }
+  });
+
   if (!resp.ok) {
     throw new Error(`Failed to fetch ${url}: ${resp.status} ${resp.statusText}`);
   }
+
   const html = await resp.text();
-  return new JSDOM(html);
+  const dom = new JSDOM(html);
+  return dom.window.document;
 }
 
 /**
- * Extract all inefficiency detail URLs from the Hub index page.
- * We look for anchor tags whose href contains "/inefficiencies/".
+ * Build a slug from a URL (last path segment).
  */
-async function extractInefficiencyUrls() {
-  const indexUrl = `${BASE_URL}/hub`;
-  const dom = await fetchHtml(indexUrl);
-  const doc = dom.window.document;
+function slugFromUrl(url) {
+  try {
+    const u = new URL(url);
+    const parts = u.pathname.replace(/\/+$/, "").split("/");
+    return parts[parts.length - 1];
+  } catch (e) {
+    return url;
+  }
+}
 
-  const links = Array.from(doc.querySelectorAll("a[href]"));
-  const urls = new Set();
+/**
+ * Schema mapping
+ */
+function mapToSchema(raw) {
+  return {
+    id: raw.id ?? null,
+    title: raw.title ?? null,
+    author: raw.author ?? null,
 
-  for (const a of links) {
-    const href = a.getAttribute("href");
-    if (!href) continue;
-    if (href.includes("/inefficiencies/")) {
-      const full = new URL(href, BASE_URL).toString();
-      urls.add(full);
+    service_category: raw.service_category ?? null,
+    cloud_provider: raw.cloud_provider ?? null,
+    service_name: raw.service_name ?? null,
+    inefficiency_type: raw.inefficiency_type ?? null,
+
+    explanation: raw.explanation ?? "",
+    billing_model: raw.billing_model ?? "",
+
+    detection_signals: Array.isArray(raw.detection_signals)
+      ? raw.detection_signals
+      : [],
+
+    remediation_actions: Array.isArray(raw.remediation_actions)
+      ? raw.remediation_actions
+      : [],
+
+    documentation_links: Array.isArray(raw.documentation_links)
+      ? raw.documentation_links
+      : [],
+
+    tags: Array.isArray(raw.tags) ? raw.tags : [],
+
+    source: {
+      url: raw.source?.url ?? null,
+      origin: "pointfive_cloud_efficiency_hub"
+    },
+
+    scraped_at: raw.scraped_at ?? new Date().toISOString()
+  };
+}
+
+
+
+/**
+ * Utility: trim a text node's value safely.
+ */
+function textValue(node) {
+  if (!node || !node.nodeValue) return "";
+  return node.nodeValue.trim();
+}
+
+/**
+ * Find the value that comes immediately after a label text node.
+ * Example in the DOM:
+ *   "Service Category"
+ *   "Storage"
+ */
+function findFieldValue(document, labelText) {
+  const walker = document.createTreeWalker(
+    document.body,
+    // Show text nodes
+    NodeFilter.SHOW_TEXT
+  );
+
+  let seenLabel = false;
+
+  while (walker.nextNode()) {
+    const node = walker.currentNode;
+    const value = textValue(node);
+
+    if (!value) continue;
+
+    if (seenLabel) {
+      // First non-empty text after the label is our value
+      return value;
+    }
+
+    if (value === labelText) {
+      seenLabel = true;
     }
   }
 
-  return Array.from(urls).sort();
-}
-
-/**
- * Get text of a tag or null if missing
- */
-function textOrNull(node) {
-  if (!node) return null;
-  const txt = node.textContent.trim();
-  return txt.length > 0 ? txt : null;
-}
-
-/**
- * Best effort helper:
- * find a label like "Service Category" then read the next meaningful sibling text.
- * The exact DOM may require adjustments.
- */
-function findFieldValue(doc, fieldLabel) {
-  const walker = doc.createTreeWalker(doc.body, NodeFilter.SHOW_TEXT);
-  let node;
-  while ((node = walker.nextNode())) {
-    const text = node.textContent.trim();
-    if (!text) continue;
-    if (text === fieldLabel) {
-      // Try to find something just after this label
-      let current = node.parentElement;
-      while (current) {
-        // go to next element
-        current = current.nextElementSibling;
-        if (!current) break;
-        const val = current.textContent.trim();
-        if (val && val !== fieldLabel) {
-          return val;
-        }
-      }
-    }
-  }
   return null;
 }
 
 /**
- * Extract paragraphs following a heading containing headingText
+ * Extract a section as a single paragraph (Explanation, Billing Model).
+ * We locate the heading text, then aggregate following text nodes
+ * until we hit another section title.
  */
-function extractSectionParagraph(doc, headingText) {
-  const headings = Array.from(
-    doc.querySelectorAll("h1, h2, h3, h4, h5, h6, strong, b")
-  );
-  let headingNode =
-    headings.find((h) =>
-      h.textContent.toLowerCase().includes(headingText.toLowerCase())
-    ) || null;
+function extractSectionParagraph(document, headingText) {
+  const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+  let inSection = false;
+  const collected = [];
 
-  if (!headingNode) return null;
+  while (walker.nextNode()) {
+    const node = walker.currentNode;
+    const value = textValue(node);
+    if (!value) continue;
 
-  const texts = [];
-  let node = headingNode;
-
-  while ((node = node.nextElementSibling)) {
-    const tagName = node.tagName.toLowerCase();
-
-    // Stop when we hit another heading or a section break
-    if (["h1", "h2", "h3", "h4", "h5", "h6"].includes(tagName)) break;
-
-    if (tagName === "p") {
-      const t = node.textContent.trim();
-      if (t) texts.push(t);
+    if (!inSection) {
+      if (value === headingText) {
+        inSection = true;
+      }
+      continue;
     }
+
+    // We are inside the section
+    // Stop if we hit another section title
+    if (SECTION_TITLES.includes(value) && value !== headingText) {
+      break;
+    }
+
+    // Skip bullet lines here; they belong to list sections
+    // Explanation/Billing Model typically are sentences/paragraphs
+    collected.push(value);
   }
 
-  return texts.length > 0 ? texts.join("\n\n") : null;
+  if (!collected.length) return null;
+
+  // Merge and normalize spaces
+  return collected.join(" ").replace(/\s+/g, " ").trim();
 }
 
 /**
- * Extract list items following a heading
+ * Extract a section as a list of bullet points (Detection, Remediation).
+ * The HTML on the site uses "•" bullet characters in plain text.
  */
-function extractSectionList(doc, headingText) {
-  const headings = Array.from(
-    doc.querySelectorAll("h1, h2, h3, h4, h5, h6, strong, b")
-  );
-  let headingNode =
-    headings.find((h) =>
-      h.textContent.toLowerCase().includes(headingText.toLowerCase())
-    ) || null;
+function extractSectionList(document, headingText) {
+  const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+  let inSection = false;
+  const items = [];
 
-  if (!headingNode) return [];
+  while (walker.nextNode()) {
+    const node = walker.currentNode;
+    const value = textValue(node);
+    if (!value) continue;
 
-  let node = headingNode;
-  while ((node = node.nextElementSibling)) {
-    const tagName = node.tagName.toLowerCase();
+    if (!inSection) {
+      if (value === headingText) {
+        inSection = true;
+      }
+      continue;
+    }
 
-    // Stop when we hit another heading
-    if (["h1", "h2", "h3", "h4", "h5", "h6"].includes(tagName)) break;
+    // We are inside the section
+    if (SECTION_TITLES.includes(value) && value !== headingText) {
+      // Next section reached: stop
+      break;
+    }
 
-    if (tagName === "ul" || tagName === "ol") {
-      const items = Array.from(node.querySelectorAll("li"))
-        .map((li) => li.textContent.trim())
-        .filter(Boolean);
-      if (items.length > 0) return items;
+    // Bullet lines start with "•" (U+2022) on this site
+    if (value.startsWith("•")) {
+      const cleaned = value.replace(/^•\s*/, "").trim();
+      if (cleaned) {
+        items.push(cleaned);
+      }
     }
   }
 
-  return [];
+  return items;
 }
 
 /**
- * Extract documentation links after a heading like "Relevant Documentation"
+ * Extract documentation links that appear after "Relevant Documentation"
+ * text node.
  */
-function extractDocumentationLinks(doc) {
-  const headings = Array.from(
-    doc.querySelectorAll("h1, h2, h3, h4, h5, h6, strong, b")
-  );
-  let headingNode =
-    headings.find((h) =>
-      h.textContent.toLowerCase().includes("relevant documentation")
-    ) || null;
-
-  if (!headingNode) return [];
-
+function extractDocumentationLinks(document) {
+  const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+  let afterHeading = false;
   const links = [];
-  let node = headingNode;
 
-  while ((node = node.nextElementSibling)) {
-    const tagName = node.tagName.toLowerCase();
-    if (["h1", "h2", "h3", "h4", "h5", "h6"].includes(tagName)) break;
+  while (walker.nextNode()) {
+    const node = walker.currentNode;
+    const value = textValue(node);
+    if (!value) continue;
 
-    const anchors = Array.from(node.querySelectorAll("a[href]"));
-    for (const a of anchors) {
-      const href = a.getAttribute("href");
-      if (!href) continue;
-      const full = new URL(href, BASE_URL).toString();
-      const title = a.textContent.trim() || null;
-      links.push({ title, url: full });
+    if (!afterHeading) {
+      if (value === "Relevant Documentation") {
+        afterHeading = true;
+      }
+      continue;
     }
+
+    // We are after the "Relevant Documentation" text.
+    // Stop if we hit another section title.
+    if (SECTION_TITLES.includes(value) && value !== "Relevant Documentation") {
+      break;
+    }
+
+    // Collect any anchors in the parent / siblings
+    const parentEl = node.parentElement;
+    if (!parentEl) continue;
+
+    const anchors = parentEl.querySelectorAll("a[href]");
+    anchors.forEach(a => {
+      const href = a.getAttribute("href");
+      if (!href) return;
+      const url = href.startsWith("http")
+        ? href
+        : new URL(href, BASE_URL).toString();
+
+      const title = (a.textContent || "").trim() || null;
+
+      // Avoid duplicates
+      if (!links.find(x => x.url === url)) {
+        links.push({ title, url });
+      }
+    });
   }
 
   return links;
 }
 
 /**
- * Construct a slug from URL path
- */
-function slugFromUrl(url) {
-  const u = new URL(url);
-  const segments = u.pathname.split("/").filter(Boolean);
-  return segments[segments.length - 1] || u.hostname;
-}
-
-/**
- * Parse one inefficiency detail page into a JSON record
+ * Parse a single inefficiency detail page and return a normalized record.
  */
 async function parseInefficiencyDetail(url) {
-  const dom = await fetchHtml(url);
-  const doc = dom.window.document;
+  const document = await fetchDocument(url);
 
-  // Title is usually main h1
-  const titleNode = doc.querySelector("h1");
-  const title = textOrNull(titleNode);
-
-  // Author is often right after the title, if present
-  let author = null;
-  if (titleNode) {
-    let candidate = titleNode.nextElementSibling;
-    if (candidate) {
-      const text = candidate.textContent.trim();
-      if (text && !text.toLowerCase().includes("service category")) {
-        author = text;
+  // Title: first H1 or fallback
+  let title = null;
+  const h1 = document.querySelector("h1");
+  if (h1 && h1.textContent) {
+    title = h1.textContent.trim();
+  } else {
+    // Fallback: the first large heading in the page text
+    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+    while (walker.nextNode()) {
+      const value = textValue(walker.currentNode);
+      if (value) {
+        title = value;
+        break;
       }
     }
   }
 
-  const serviceCategory = findFieldValue(doc, "Service Category");
-  const cloudProvider = findFieldValue(doc, "Cloud Provider");
-  const serviceName = findFieldValue(doc, "Service Name");
-  const inefficiencyType = findFieldValue(doc, "Inefficiency Type");
+  // Author: text node immediately after the title
+  let author = null;
+  if (h1) {
+    // Find next non-empty text after h1
+    let node = h1.nextSibling;
+    while (node) {
+      if (node.nodeType === node.TEXT_NODE) {
+        const val = textValue(node);
+        if (val && !SECTION_TITLES.includes(val)) {
+          author = val;
+          break;
+        }
+      }
+      if (node.nodeType === node.ELEMENT_NODE) {
+        const val = node.textContent && node.textContent.trim();
+        if (val && val !== title && !SECTION_TITLES.includes(val)) {
+          author = val;
+          break;
+        }
+      }
+      node = node.nextSibling;
+    }
+  }
 
-  const explanation = extractSectionParagraph(doc, "Explanation");
-  const billingModel = extractSectionParagraph(doc, "Relevant Billing Model");
-  const detectionSignals = extractSectionList(doc, "Detection");
-  const remediationActions = extractSectionList(doc, "Remediation");
-  const documentationLinks = extractDocumentationLinks(doc);
+  const serviceCategory = findFieldValue(document, "Service Category");
+  const cloudProvider = findFieldValue(document, "Cloud Provider");
+  const serviceName = findFieldValue(document, "Service Name");
+  const inefficiencyType = findFieldValue(document, "Inefficiency Type");
+
+  const explanation = extractSectionParagraph(document, "Explanation");
+  const billingModel = extractSectionParagraph(document, "Relevant Billing Model");
+  const detectionSignals = extractSectionList(document, "Detection");
+  const remediationActions = extractSectionList(document, "Remediation");
+  const documentationLinks = extractDocumentationLinks(document);
 
   const record = {
     id: slugFromUrl(url),
@@ -248,53 +348,81 @@ async function parseInefficiencyDetail(url) {
     scraped_at: new Date().toISOString()
   };
 
-  return record;
+  return mapToSchema(record);
+
+
+/**
+ * Discover inefficiency URLs from the Hub index page.
+ */
+async function extractInefficiencyUrls(limit) {
+  const indexUrl = `${BASE_URL}/hub`;
+  const document = await fetchDocument(indexUrl);
+
+  const anchors = Array.from(document.querySelectorAll("a[href]"));
+  const urlsSet = new Set();
+
+  anchors.forEach(a => {
+    const href = a.getAttribute("href");
+    if (!href) return;
+
+    if (href.includes("/inefficiencies/")) {
+      const fullUrl = href.startsWith("http")
+        ? href
+        : new URL(href, BASE_URL).toString();
+      urlsSet.add(fullUrl);
+    }
+  });
+
+  const urls = Array.from(urlsSet);
+  urls.sort(); // deterministic order
+
+  if (typeof limit === "number" && limit > 0) {
+    return urls.slice(0, limit);
+  }
+
+  return urls;
 }
 
 /**
- * Main Vercel handler
- *
- * Query parameters:
- *   limit  - optional integer to limit number of pages scraped
+ * Vercel serverless function handler.
  */
 module.exports = async (req, res) => {
   try {
-    const limitParam = req.query.limit;
-    const limit =
-      typeof limitParam === "string" && limitParam.trim() !== ""
-        ? parseInt(limitParam, 10)
-        : null;
+    const requestUrl = new URL(req.url, "http://localhost");
+    const urlParam = requestUrl.searchParams.get("url");
+    const limitParam = requestUrl.searchParams.get("limit");
 
-    const urls = await extractInefficiencyUrls();
-    const selectedUrls =
-      limit && Number.isFinite(limit) && limit > 0
-        ? urls.slice(0, limit)
-        : urls;
+    const limit = limitParam ? parseInt(limitParam, 10) : 10; // default: 10 entries for safety
+
+    if (urlParam) {
+      // Scrape a single detail page
+      const record = await parseInefficiencyDetail(urlParam);
+      res.setHeader("Content-Type", "application/json");
+      res.status(200).send(JSON.stringify(record, null, 2));
+      return;
+    }
+
+    // Discover inefficiency URLs from the hub index
+    const urls = await extractInefficiencyUrls(limit);
 
     const results = [];
+    for (const url of urls) {
+      // You can add small delay here if you want to be extra polite:
+      // await new Promise(r => setTimeout(r, 200));
 
-    for (const url of selectedUrls) {
-      try {
-        const record = await parseInefficiencyDetail(url);
-        results.push(record);
-      } catch (err) {
-        // Do not fail completely if one page is broken
-        console.error(`Error scraping ${url}:`, err.message);
-        results.push({
-          id: slugFromUrl(url),
-          error: true,
-          error_message: err.message,
-          source: { url, origin: "pointfive_cloud_efficiency_hub" },
-          scraped_at: new Date().toISOString()
-        });
-      }
+      const record = await parseInefficiencyDetail(url);
+      results.push(record);
     }
 
     res.setHeader("Content-Type", "application/json");
-    res.status(200).send(JSON.stringify({ count: results.length, items: results }, null, 2));
+    res.status(200).send(JSON.stringify({
+      count: results.length,
+      urls,
+      items: results
+    }, null, 2));
+
   } catch (err) {
-    console.error("Fatal scraper error:", err);
-    res.status(500).json({ error: true, message: err.message });
+    console.error("Scraper error:", err);
+    res.status(500).json({ error: "Scrape failed", details: String(err) });
   }
 };
-

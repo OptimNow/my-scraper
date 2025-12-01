@@ -7,8 +7,9 @@
     "scrape": "node scripts/run_scrape_batch.js"
   },
   "dependencies": {
-    "node-fetch": "^3.x",
-    "jsdom": "^22.x",
-    "aws-sdk": "^2.x"   // ou @aws-sdk/client-s3 si version v3
+    "node-fetch": "^3.3.2",
+    "jsdom": "^22.1.0",
+    "aws-sdk": "^2.1585.0"
   }
 }
+
