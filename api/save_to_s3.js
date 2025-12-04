@@ -99,7 +99,7 @@ module.exports = async (req, res) => {
   }
 
   // Read environment variables INSIDE the handler (required for Vercel)
-  const BUCKET_NAME = process.env.S3_BUCKET_NAME;
+  const BUCKET_NAME = process.env.S3_BUCKET_NAME ? process.env.S3_BUCKET_NAME.trim() : null;
   const PREFIX = normalizePrefix(process.env.S3_PREFIX || "Recos/");
   const AWS_REGION = process.env.AWS_REGION || "us-east-1";
 
