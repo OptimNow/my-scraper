@@ -1,12 +1,13 @@
 {
   "permissions": {
     "allow": [
-      "Bash(node -c:*)",
-      "Bash(test:*)",
-      "Bash(git check-ignore:*)",
-      "Bash(tree:*)",
-      "Bash(git rm:*)",
-      "Bash(git add:*)"
+      "Bash(git push:*)",
+      "Bash(gh pr create:*)",
+      "Bash(echo:*)",
+      "Bash(git commit:*)",
+      "Bash(git add:*)",
+      "Bash(curl:*)",
+      "Bash(node -c:*)"
     ],
     "deny": [],
     "ask": []

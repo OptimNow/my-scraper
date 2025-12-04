@@ -333,7 +333,10 @@
       resultDiv.innerHTML = '';
     });
 
+    let currentData = null; // Store scraped data
+
     function showSuccess(data) {
+      currentData = data; // Store for S3 upload
       const isSingleUrl = !data.count;
 
       let html = '<div class="result success">';
@@ -348,10 +351,87 @@
         html += '</div>';
       }
 
+      // Add Save to S3 button
+      html += '<div style="margin: 16px 0; display: flex; gap: 12px;">';
+      html += '<button id="saveToS3Btn" class="btn-primary" style="flex: 1;">💾 Save to S3</button>';
+      html += '</div>';
+
       html += '<pre class="json-output">' + JSON.stringify(data, null, 2) + '</pre>';
       html += '</div>';
 
       resultDiv.innerHTML = html;
+
+      // Add event listener to Save to S3 button
+      const saveBtn = document.getElementById('saveToS3Btn');
+      if (saveBtn) {
+        saveBtn.addEventListener('click', saveToS3);
+      }
+    }
+
+    async function saveToS3() {
+      if (!currentData) {
+        showError('No data to save');
+        return;
+      }
+
+      const saveBtn = document.getElementById('saveToS3Btn');
+      if (!saveBtn) return;
+
+      // Show loading state
+      const originalText = saveBtn.innerHTML;
+      saveBtn.disabled = true;
+      saveBtn.innerHTML = '<span class="spinner"></span> Saving to S3...';
+
+      try {
+        // Prepare data for S3
+        const dataToSave = currentData.items || currentData;
+
+        const response = await fetch('/api/save_to_s3', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({ data: dataToSave })
+        });
+
+        const result = await response.json();
+
+        if (!response.ok) {
+          throw new Error(result.message || result.error || 'Save to S3 failed');
+        }
+
+        // Show success message
+        showS3Success(result);
+      } catch (error) {
+        showError('Failed to save to S3: ' + error.message);
+      } finally {
+        if (saveBtn) {
+          saveBtn.disabled = false;
+          saveBtn.innerHTML = originalText;
+        }
+      }
+    }
+
+    function showS3Success(result) {
+      let html = '<div class="result success" style="margin-top: 20px;">';
+      html += '<h3>✅ Saved to S3!</h3>';
+      html += '<div class="stats">';
+      html += `<div class="stat"><div class="stat-label">Files Uploaded</div><div class="stat-value">${result.filesUploaded}</div></div>`;
+      html += `<div class="stat"><div class="stat-label">Bucket</div><div class="stat-value" style="font-size: 14px;">${result.bucket}</div></div>`;
+      html += `<div class="stat"><div class="stat-label">Duration</div><div class="stat-value">${Math.round(result.duration / 1000)}s</div></div>`;
+      html += '</div>';
+      html += '<div style="margin-top: 16px; padding: 12px; background: #f0f9ff; border-radius: 6px;">';
+      html += '<div style="font-weight: 600; margin-bottom: 8px;">Uploaded Files:</div>';
+      result.files.forEach(file => {
+        html += `<div style="font-family: monospace; font-size: 12px; color: #666; margin-bottom: 4px;">📄 ${file.key} (${Math.round(file.size / 1024)} KB)</div>`;
+      });
+      html += '</div>';
+      html += '</div>';
+
+      // Append to result div
+      const s3ResultDiv = document.createElement('div');
+      s3ResultDiv.innerHTML = html;
+      resultDiv.appendChild(s3ResultDiv);
     }
 
     function showError(message) {
