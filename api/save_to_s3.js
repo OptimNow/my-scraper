@@ -111,11 +111,19 @@ module.exports = async (req, res) => {
   }
 
   // Validate environment variables
+  logger.info('S3 Configuration check', {
+    requestId,
+    bucketName: BUCKET_NAME || 'NOT_SET',
+    hasAwsKey: !!process.env.AWS_ACCESS_KEY_ID,
+    hasAwsSecret: !!process.env.AWS_SECRET_ACCESS_KEY,
+    region: process.env.AWS_REGION || 'eu-central-1'
+  });
+
   if (!BUCKET_NAME) {
     logger.error('S3_BUCKET_NAME not configured', null, { requestId });
     return res.status(500).json({
       error: "Server configuration error",
-      message: "S3_BUCKET_NAME environment variable is not set",
+      message: "S3_BUCKET_NAME environment variable is not set. Please configure it in Vercel Settings → Environment Variables",
       requestId
     });
   }
