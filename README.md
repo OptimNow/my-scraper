@@ -1,20 +1,63 @@
 # my-scraper
-This project is a **lightweight web scraper**, designed to run once (or occasionally) on **Vercel serverless functions**, extract data from a public website, convert it into structured JSON, and upload the results into **Amazon S3** for further processing.
+
+A **lightweight web scraper** that extracts cloud cost optimization insights from hub.pointfive.co and stores them as structured JSON in **Amazon S3**.
+
+## Quick Start
+
+### Option 1: Web UI (easiest)
+1. Visit https://my-scraper-roan.vercel.app
+2. Enter a limit (e.g., 50 for 50 entries, or 240 for all)
+3. Click "Scrape Now"
+4. Click "Save to S3" to upload results
+
+### Option 2: Batch Script (for large batches)
+```powershell
+# Windows PowerShell
+.\scrape_batch.ps1 -Limit 240 -VercelUrl "https://my-scraper-roan.vercel.app"
+```
+
+```bash
+# Mac/Linux
+export SCRAPER_API_URL=https://my-scraper-roan.vercel.app/api/scrape_hub
+export S3_BUCKET_NAME=your-bucket-name
+export AWS_ACCESS_KEY_ID=your-key
+export AWS_SECRET_ACCESS_KEY=your-secret
+node scripts/run_scrape_batch.js --limit=240
+```
+
+### What Gets Scraped
+
+Each entry includes:
+- **id**: Unique inefficiency identifier
+- **title**: Inefficiency name
+- **url**: Source URL
+- **service_category**: AWS service (e.g., EC2, RDS)
+- **provider**: Cloud provider (AWS, Azure, GCP)
+- **inefficiency_type**: Type of issue (Cost, Performance, etc.)
+- **explanation**: Detailed description
+- **detection_signals**: How to detect this issue
+- **remediation_actions**: How to fix it
+- **documentation_links**: Related resources
+
+---
+
+## Overview
+
+This project is designed to run on **Vercel serverless functions**, extract data from hub.pointfive.co, convert it into structured JSON, and upload the results into **Amazon S3** for further processing.
 
 The long-term goal is to **construct a Knowledge Base (KB)** using the scraped JSON files as raw input for embedding and vectorization (e.g., AWS Bedrock, OpenAI, or any vector DB).
 
-The project is intentionally minimalistic and oriented toward automation, portability, and one-shot execution.
 
 
+## Features
 
-## 0. Next Steps
-
-- Implement the scraper logic in `api/scrape_hub.js`. (done)
-- Map extracted content to your internal JSON schema. (done)
-- Build S3 upload utility in `scripts/run_scrape_batch.js`. (done)
-- Generate datasets and upload them.
-- Validate quality and standardize metadata.
-- Run embeddings to create your Knowledge Base.
+- ✅ **Full pagination support**: Discovers all 240+ inefficiencies across multiple pages
+- ✅ **Web UI**: Easy-to-use interface at https://my-scraper-roan.vercel.app
+- ✅ **Direct S3 upload**: Save scraped data with one click
+- ✅ **Batch script**: Command-line tool for automated scraping
+- ✅ **Structured JSON**: Clean, normalized data ready for KB ingestion
+- ✅ **Fast scraping**: Optimized delays for maximum throughput
+- ✅ **Error handling**: Continues on failures, logs all issues
 
 ------
 
@@ -28,84 +71,144 @@ The project is intentionally minimalistic and oriented toward automation, portab
 
 ------
 
-## 2. Project Structure
+## Configuration
 
-The repository follows a simple layout:
+### Environment Variables
+
+Set these in Vercel Dashboard (Settings → Environment Variables):
+
+| Variable | Description | Example |
+|----------|-------------|---------|
+| `AWS_ACCESS_KEY_ID` | AWS IAM user access key | `AKIAIOSFODNN7EXAMPLE` |
+| `AWS_SECRET_ACCESS_KEY` | AWS IAM user secret key | `wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY` |
+| `S3_BUCKET_NAME` | S3 bucket for storing results | `optimnow-finops-repo` |
+| `AWS_REGION` | AWS region | `us-east-1` |
+
+### IAM Permissions
+
+Your AWS IAM user needs:
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": ["s3:PutObject", "s3:PutObjectAcl"],
+      "Resource": "arn:aws:s3:::your-bucket-name/*"
+    }
+  ]
+}
+```
+
+---
+
+## Project Structure
 
 ```
 my-scraper/
   ├─ api/
-  │    └─ scrape_hub.js          # Main Vercel serverless scraper endpoint
+  │    ├─ scrape_hub.js          # Main scraper endpoint (GET /api/scrape_hub?limit=N)
+  │    └─ save_to_s3.js          # S3 upload endpoint (POST /api/save_to_s3)
+  ├─ public/
+  │    └─ index.html             # Web UI
   ├─ scripts/
-  │    └─ run_scrape_batch.js    # Optional batch scraper (run locally or in CI)
-  ├─ config/
-  │    └─ s3.config.js           # S3 client configuration (env-based)
-  ├─ .gitignore                  # Standard Node.js + env ignores
-  ├─ package.json                # Project dependencies & scripts
-  ├─ vercel.json                 # Vercel deployment configuration
-  └─ README.md                   # This documentation
-```
-
-### Relevant files
-
-- `.gitignore` includes Node.js artifacts, env files, AWS config files, and build directories. 
-- `package.json` declares dependencies (`node-fetch`, `jsdom`, `aws-sdk`) and simple scripts (`start`, `scrape`). 
-- `vercel.json` exposes the `/api/scrape_hub` endpoint as a serverless function. 
+  │    └─ run_scrape_batch.js    # Batch script for CLI usage
+  ├─ scrape_batch.ps1            # PowerShell wrapper script
+  ├─ package.json                # Dependencies (jsdom, aws-sdk, node-fetch)
+  └─ vercel.json                 # Vercel deployment config
+``` 
 
 ------
 
-## 3. How the scraper works
+## How It Works
 
-### 3.1. Serverless endpoint
+### 1. Web UI (Recommended for Most Users)
 
-The file:
+The web interface at https://my-scraper-roan.vercel.app provides:
+- Simple form to enter scraping limit
+- Real-time scraping with progress display
+- Preview of scraped data in JSON format
+- One-click "Save to S3" button
+- Visual feedback with statistics (total, success, failed, duration)
 
-```
-api/scrape_hub.js
-```
+**Usage:**
+1. Open https://my-scraper-roan.vercel.app in your browser
+2. Enter a limit (1-240) or leave blank for default
+3. Click "Scrape Now" and wait for results
+4. Review the data in the JSON preview
+5. Click "Save to S3" to upload to your bucket
 
-will:
+### 2. API Endpoint
 
-1. Fetch one page or multiple pages from the target website.
+Direct API access for automation:
 
-2. Use **JSDOM** (or Cheerio) to parse the HTML.
+```bash
+# Scrape first 50 entries
+curl "https://my-scraper-roan.vercel.app/api/scrape_hub?limit=50"
 
-3. Extract fields such as:
+# Scrape all entries (240+)
+curl "https://my-scraper-roan.vercel.app/api/scrape_hub?limit=240"
 
-   - id / slug
-   - title
-   - service category
-   - provider
-   - inefficiency type
-   - explanation
-   - detection signals
-   - remediation actions
-   - documentation links
-
-4. Produce a JSON object that matches your internal schema.
-
-5. Return the JSON when you call the endpoint:
-
-   ```
-   https://<your-vercel-deployment>/api/scrape_hub
-   ```
-
-### 3.2. Batch script (optional)
-
-The script:
-
-```
-scripts/run_scrape_batch.js
+# Scrape a specific URL
+curl "https://my-scraper-roan.vercel.app/api/scrape_hub?url=https://hub.pointfive.co/inefficiencies/..."
 ```
 
-allows you to:
+**Response format:**
+```json
+{
+  "count": 50,
+  "total": 50,
+  "failed": 0,
+  "items": [
+    {
+      "id": "aurora-extended-support",
+      "title": "Aurora Extended Support",
+      "url": "https://hub.pointfive.co/inefficiencies/aurora-extended-support",
+      "service_category": "RDS",
+      "provider": "AWS",
+      "inefficiency_type": "Cost",
+      "explanation": "...",
+      "detection_signals": ["..."],
+      "remediation_actions": ["..."],
+      "documentation_links": ["..."]
+    }
+  ],
+  "duration": 45000
+}
+```
 
-- Loop over many URLs
-- Aggregate results
-- Upload them into S3 in one pass
-- Or dump them locally for inspection
+### 3. Batch Script (For Automation)
 
-This script is optional but very useful for development and debugging.
+Use the command-line script to scrape and upload in one step:
+
+```powershell
+# Windows PowerShell
+.\scrape_batch.ps1 -Limit 240 -VercelUrl "https://my-scraper-roan.vercel.app"
+```
+
+```bash
+# Mac/Linux
+export SCRAPER_API_URL=https://my-scraper-roan.vercel.app/api/scrape_hub
+export S3_BUCKET_NAME=optimnow-finops-repo
+export AWS_ACCESS_KEY_ID=your-access-key
+export AWS_SECRET_ACCESS_KEY=your-secret-key
+export AWS_REGION=us-east-1
+node scripts/run_scrape_batch.js --limit=240
+```
+
+The script will:
+1. Call the scraper API with your limit
+2. Receive all scraped entries
+3. Upload a summary file + individual files to S3
+4. Log results with structured JSON output
+
+**S3 Output:**
+```
+s3://your-bucket/Recos/scraper_summary_2025-12-04T12-00-00-000Z.json
+s3://your-bucket/Recos/scraped_aurora-extended-support_2025-12-04T12-00-00-000Z.json
+s3://your-bucket/Recos/scraped_idle-ec2-instances_2025-12-04T12-00-00-000Z.json
+...
+```
 
 ------
 
