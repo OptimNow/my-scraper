@@ -13,18 +13,6 @@
 
 const AWS = require("aws-sdk");
 
-// Configure AWS SDK
-AWS.config.update({
-  region: process.env.AWS_REGION || "eu-central-1",
-  accessKeyId: process.env.AWS_ACCESS_KEY_ID,
-  secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY
-});
-
-const s3 = new AWS.S3();
-
-const BUCKET_NAME = process.env.S3_BUCKET_NAME;
-const PREFIX = process.env.S3_PREFIX || "Recos/";
-
 /**
  * Structured logger
  */
@@ -69,11 +57,11 @@ function normalizePrefix(prefix) {
 /**
  * Upload to S3
  */
-async function uploadToS3(key, bodyObj) {
+async function uploadToS3(s3, bucketName, key, bodyObj) {
   const bodyStr = JSON.stringify(bodyObj, null, 2);
 
   const params = {
-    Bucket: BUCKET_NAME,
+    Bucket: bucketName,
     Key: key,
     Body: bodyStr,
     ContentType: "application/json"
@@ -82,16 +70,16 @@ async function uploadToS3(key, bodyObj) {
   await s3.putObject(params).promise();
 
   logger.info('File uploaded to S3', {
-    bucket: BUCKET_NAME,
+    bucket: bucketName,
     key,
     size: bodyStr.length
   });
 
   return {
-    bucket: BUCKET_NAME,
+    bucket: bucketName,
     key,
     size: bodyStr.length,
-    url: `s3://${BUCKET_NAME}/${key}`
+    url: `s3://${bucketName}/${key}`
   };
 }
 
@@ -110,13 +98,27 @@ module.exports = async (req, res) => {
     });
   }
 
+  // Read environment variables INSIDE the handler (required for Vercel)
+  const BUCKET_NAME = process.env.S3_BUCKET_NAME;
+  const PREFIX = normalizePrefix(process.env.S3_PREFIX || "Recos/");
+  const AWS_REGION = process.env.AWS_REGION || "us-east-1";
+
+  // Configure AWS SDK with credentials from environment
+  AWS.config.update({
+    region: AWS_REGION,
+    accessKeyId: process.env.AWS_ACCESS_KEY_ID,
+    secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY
+  });
+
+  const s3 = new AWS.S3();
+
   // Validate environment variables
   logger.info('S3 Configuration check', {
     requestId,
     bucketName: BUCKET_NAME || 'NOT_SET',
     hasAwsKey: !!process.env.AWS_ACCESS_KEY_ID,
     hasAwsSecret: !!process.env.AWS_SECRET_ACCESS_KEY,
-    region: process.env.AWS_REGION || 'eu-central-1'
+    region: AWS_REGION
   });
 
   if (!BUCKET_NAME) {
@@ -162,7 +164,7 @@ module.exports = async (req, res) => {
     if (Array.isArray(data)) {
       // Summary file
       const summaryKey = `${prefix}scraper_summary_${ts}.json`;
-      const summaryResult = await uploadToS3(summaryKey, {
+      const summaryResult = await uploadToS3(s3, BUCKET_NAME, summaryKey, {
         count: data.length,
         items: data,
         saved_at: new Date().toISOString(),
@@ -179,7 +181,7 @@ module.exports = async (req, res) => {
         const itemKey = `${prefix}scraped_${idPart}_${ts}.json`;
 
         try {
-          const result = await uploadToS3(itemKey, item);
+          const result = await uploadToS3(s3, BUCKET_NAME, itemKey, item);
           uploadedFiles.push(result);
         } catch (error) {
           logger.error('Failed to upload individual file', error, {
@@ -196,7 +198,7 @@ module.exports = async (req, res) => {
         ? data.id.trim()
         : `item-${ts}`;
       const itemKey = `${prefix}scraped_${idPart}_${ts}.json`;
-      const result = await uploadToS3(itemKey, data);
+      const result = await uploadToS3(s3, BUCKET_NAME, itemKey, data);
       uploadedFiles.push(result);
     }
 
