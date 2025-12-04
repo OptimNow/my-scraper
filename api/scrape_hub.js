@@ -474,26 +474,66 @@ async function parseInefficiencyDetail(url) {
  * Discover inefficiency URLs from the Hub index page.
  */
 async function extractInefficiencyUrls(limit) {
-  const indexUrl = `${BASE_URL}/hub`;
-  const document = await fetchDocument(indexUrl);
-
-  const anchors = Array.from(document.querySelectorAll("a[href]"));
   const urlsSet = new Set();
 
-  anchors.forEach(a => {
-    const href = a.getAttribute("href");
-    if (!href) return;
+  // The hub uses pagination with pattern: ?ffbc0c57_page=1, ?ffbc0c57_page=2, etc.
+  // We'll fetch multiple pages to get all URLs
+  const MAX_PAGES = 30; // Safety limit (actual is ~24 pages for 1234 items)
 
-    if (href.includes("/inefficiencies/")) {
-      const fullUrl = href.startsWith("http")
-        ? href
-        : new URL(href, BASE_URL).toString();
-      urlsSet.add(fullUrl);
+  logger.info('Starting URL extraction from paginated hub');
+
+  for (let page = 1; page <= MAX_PAGES; page++) {
+    try {
+      const indexUrl = page === 1
+        ? `${BASE_URL}/hub`
+        : `${BASE_URL}/hub?ffbc0c57_page=${page}`;
+
+      const document = await fetchDocument(indexUrl);
+      const anchors = Array.from(document.querySelectorAll("a[href]"));
+
+      let foundOnThisPage = 0;
+      anchors.forEach(a => {
+        const href = a.getAttribute("href");
+        if (!href) return;
+
+        if (href.includes("/inefficiencies/")) {
+          const fullUrl = href.startsWith("http")
+            ? href
+            : new URL(href, BASE_URL).toString();
+          urlsSet.add(fullUrl);
+          foundOnThisPage++;
+        }
+      });
+
+      logger.info('Extracted URLs from page', {
+        page,
+        foundOnPage: foundOnThisPage,
+        totalSoFar: urlsSet.size
+      });
+
+      // If we found no inefficiency URLs on this page, we've reached the end
+      if (foundOnThisPage === 0) {
+        logger.info('No more pages to fetch', { lastPage: page });
+        break;
+      }
+
+      // Polite delay between page fetches
+      if (page < MAX_PAGES) {
+        await new Promise(resolve => setTimeout(resolve, REQUEST_DELAY_MS));
+      }
+    } catch (error) {
+      logger.error('Error fetching page', error, { page });
+      // Continue with other pages
     }
-  });
+  }
 
   const urls = Array.from(urlsSet);
   urls.sort(); // deterministic order
+
+  logger.info('URL extraction completed', {
+    totalUrls: urls.length,
+    sampleUrls: urls.slice(0, 3)
+  });
 
   if (typeof limit === "number" && limit > 0) {
     return urls.slice(0, limit);
