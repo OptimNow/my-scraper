@@ -219,8 +219,8 @@ function textValue(node) {
 function findFieldValue(document, labelText) {
   const walker = document.createTreeWalker(
     document.body,
-    // Show text nodes
-    NodeFilter.SHOW_TEXT
+    // Show text nodes (4 = NodeFilter.SHOW_TEXT)
+    4
   );
 
   let seenLabel = false;
@@ -250,7 +250,7 @@ function findFieldValue(document, labelText) {
  * until we hit another section title.
  */
 function extractSectionParagraph(document, headingText) {
-  const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+  const walker = document.createTreeWalker(document.body, 4); // 4 = NodeFilter.SHOW_TEXT
   let inSection = false;
   const collected = [];
 
@@ -288,7 +288,7 @@ function extractSectionParagraph(document, headingText) {
  * The HTML on the site uses "•" bullet characters in plain text.
  */
 function extractSectionList(document, headingText) {
-  const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+  const walker = document.createTreeWalker(document.body, 4); // 4 = NodeFilter.SHOW_TEXT
   let inSection = false;
   const items = [];
 
@@ -327,7 +327,7 @@ function extractSectionList(document, headingText) {
  * text node.
  */
 function extractDocumentationLinks(document) {
-  const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+  const walker = document.createTreeWalker(document.body, 4); // 4 = NodeFilter.SHOW_TEXT
   let afterHeading = false;
   const links = [];
 
@@ -386,7 +386,7 @@ async function parseInefficiencyDetail(url) {
     title = h1.textContent.trim();
   } else {
     // Fallback: the first large heading in the page text
-    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+    const walker = document.createTreeWalker(document.body, 4); // 4 = NodeFilter.SHOW_TEXT
     while (walker.nextNode()) {
       const value = textValue(walker.currentNode);
       if (value) {
