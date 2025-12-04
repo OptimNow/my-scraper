@@ -285,39 +285,54 @@ function extractSectionParagraph(document, headingText) {
 
 /**
  * Extract a section as a list of bullet points (Detection, Remediation).
- * The HTML on the site uses "•" bullet characters in plain text.
+ * The HTML on the site uses <ul><li> elements for lists.
  */
 function extractSectionList(document, headingText) {
   const walker = document.createTreeWalker(document.body, 4); // 4 = NodeFilter.SHOW_TEXT
   let inSection = false;
-  const items = [];
+  let foundHeading = null;
 
+  // First, find the heading
   while (walker.nextNode()) {
     const node = walker.currentNode;
     const value = textValue(node);
     if (!value) continue;
 
-    if (!inSection) {
-      if (value === headingText) {
-        inSection = true;
-      }
-      continue;
-    }
-
-    // We are inside the section
-    if (SECTION_TITLES.includes(value) && value !== headingText) {
-      // Next section reached: stop
+    if (value === headingText) {
+      foundHeading = node;
       break;
     }
-
-    // Bullet lines start with "•" (U+2022) on this site
-    if (value.startsWith("•")) {
-      const cleaned = value.replace(/^•\s*/, "").trim();
-      if (cleaned) {
-        items.push(cleaned);
-      }
-    }
   }
+
+  if (!foundHeading) {
+    return [];
+  }
+
+  // Find the parent element containing the heading
+  let container = foundHeading.parentElement;
+  while (container && !container.querySelector('ul')) {
+    container = container.parentElement;
+  }
+
+  if (!container) {
+    return [];
+  }
+
+  // Find the next <ul> after the heading
+  const ul = container.querySelector('ul');
+  if (!ul) {
+    return [];
+  }
+
+  // Extract all <li> items
+  const items = [];
+  const listItems = ul.querySelectorAll('li');
+  listItems.forEach(li => {
+    const text = li.textContent.trim();
+    if (text) {
+      items.push(text);
+    }
+  });
 
   return items;
 }
