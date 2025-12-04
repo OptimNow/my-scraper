@@ -1,0 +1,367 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PointFive Scraper</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+    }
+
+    .container {
+      background: white;
+      border-radius: 16px;
+      box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+      padding: 40px;
+      max-width: 800px;
+      width: 100%;
+    }
+
+    h1 {
+      color: #333;
+      margin-bottom: 10px;
+      font-size: 32px;
+    }
+
+    .subtitle {
+      color: #666;
+      margin-bottom: 30px;
+      font-size: 16px;
+    }
+
+    .form-group {
+      margin-bottom: 20px;
+    }
+
+    label {
+      display: block;
+      font-weight: 600;
+      color: #555;
+      margin-bottom: 8px;
+      font-size: 14px;
+    }
+
+    input[type="url"],
+    input[type="number"] {
+      width: 100%;
+      padding: 14px 16px;
+      border: 2px solid #e0e0e0;
+      border-radius: 8px;
+      font-size: 16px;
+      transition: all 0.3s ease;
+      font-family: 'Courier New', monospace;
+    }
+
+    input:focus {
+      outline: none;
+      border-color: #667eea;
+      box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+    }
+
+    .button-group {
+      display: flex;
+      gap: 12px;
+      margin-top: 30px;
+    }
+
+    button {
+      flex: 1;
+      padding: 14px 24px;
+      border: none;
+      border-radius: 8px;
+      font-size: 16px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.3s ease;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+    }
+
+    .btn-primary {
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: white;
+    }
+
+    .btn-primary:hover:not(:disabled) {
+      transform: translateY(-2px);
+      box-shadow: 0 10px 25px rgba(102, 126, 234, 0.4);
+    }
+
+    .btn-secondary {
+      background: #f5f5f5;
+      color: #555;
+    }
+
+    .btn-secondary:hover:not(:disabled) {
+      background: #e0e0e0;
+    }
+
+    button:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+    }
+
+    .spinner {
+      display: inline-block;
+      width: 16px;
+      height: 16px;
+      border: 3px solid rgba(255,255,255,0.3);
+      border-top-color: white;
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+
+    .result {
+      margin-top: 30px;
+      padding: 20px;
+      border-radius: 8px;
+      border-left: 4px solid;
+      animation: slideIn 0.3s ease;
+    }
+
+    @keyframes slideIn {
+      from {
+        opacity: 0;
+        transform: translateY(-10px);
+      }
+      to {
+        opacity: 1;
+        transform: translateY(0);
+      }
+    }
+
+    .result.success {
+      background: #f0fdf4;
+      border-color: #22c55e;
+    }
+
+    .result.error {
+      background: #fef2f2;
+      border-color: #ef4444;
+    }
+
+    .result h3 {
+      margin-bottom: 12px;
+      font-size: 18px;
+    }
+
+    .result.success h3 {
+      color: #15803d;
+    }
+
+    .result.error h3 {
+      color: #b91c1c;
+    }
+
+    .json-output {
+      background: #1e1e1e;
+      color: #d4d4d4;
+      padding: 16px;
+      border-radius: 6px;
+      overflow-x: auto;
+      max-height: 400px;
+      font-family: 'Courier New', monospace;
+      font-size: 13px;
+      line-height: 1.6;
+    }
+
+    .info-box {
+      background: #f0f9ff;
+      border-left: 4px solid #3b82f6;
+      padding: 16px;
+      border-radius: 8px;
+      margin-bottom: 24px;
+    }
+
+    .info-box p {
+      color: #1e40af;
+      font-size: 14px;
+      line-height: 1.6;
+    }
+
+    .stats {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+      gap: 12px;
+      margin-top: 12px;
+    }
+
+    .stat {
+      background: white;
+      padding: 12px;
+      border-radius: 6px;
+      text-align: center;
+    }
+
+    .stat-label {
+      font-size: 12px;
+      color: #666;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      margin-bottom: 4px;
+    }
+
+    .stat-value {
+      font-size: 24px;
+      font-weight: 700;
+      color: #333;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>🔍 PointFive Scraper</h1>
+    <p class="subtitle">Extract cloud cost optimization insights</p>
+
+    <div class="info-box">
+      <p><strong>Tip:</strong> Enter a full URL or use the batch scraper to get multiple entries at once.</p>
+    </div>
+
+    <form id="scraperForm">
+      <div class="form-group">
+        <label for="url">URL to Scrape (optional)</label>
+        <input
+          type="url"
+          id="url"
+          name="url"
+          placeholder="https://hub.pointfive.co/inefficiencies/..."
+        >
+      </div>
+
+      <div class="form-group">
+        <label for="limit">Or scrape multiple entries (limit)</label>
+        <input
+          type="number"
+          id="limit"
+          name="limit"
+          min="1"
+          max="20"
+          placeholder="5"
+        >
+      </div>
+
+      <div class="button-group">
+        <button type="submit" class="btn-primary" id="submitBtn">
+          <span id="btnText">Scrape Now</span>
+        </button>
+        <button type="button" class="btn-secondary" id="clearBtn">
+          Clear
+        </button>
+      </div>
+    </form>
+
+    <div id="result"></div>
+  </div>
+
+  <script>
+    const form = document.getElementById('scraperForm');
+    const urlInput = document.getElementById('url');
+    const limitInput = document.getElementById('limit');
+    const submitBtn = document.getElementById('submitBtn');
+    const btnText = document.getElementById('btnText');
+    const clearBtn = document.getElementById('clearBtn');
+    const resultDiv = document.getElementById('result');
+
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+
+      const url = urlInput.value.trim();
+      const limit = limitInput.value.trim();
+
+      if (!url && !limit) {
+        showError('Please enter either a URL or a limit');
+        return;
+      }
+
+      // Build API URL
+      let apiUrl = '/api/scrape_hub';
+      const params = new URLSearchParams();
+
+      if (url) {
+        params.append('url', url);
+      } else if (limit) {
+        params.append('limit', limit);
+      }
+
+      if (params.toString()) {
+        apiUrl += '?' + params.toString();
+      }
+
+      // Show loading state
+      submitBtn.disabled = true;
+      btnText.innerHTML = '<span class="spinner"></span> Scraping...';
+      resultDiv.innerHTML = '';
+
+      try {
+        const response = await fetch(apiUrl);
+        const data = await response.json();
+
+        if (!response.ok) {
+          throw new Error(data.details || data.error || 'Scraping failed');
+        }
+
+        showSuccess(data);
+      } catch (error) {
+        showError(error.message);
+      } finally {
+        submitBtn.disabled = false;
+        btnText.textContent = 'Scrape Now';
+      }
+    });
+
+    clearBtn.addEventListener('click', () => {
+      form.reset();
+      resultDiv.innerHTML = '';
+    });
+
+    function showSuccess(data) {
+      const isSingleUrl = !data.count;
+
+      let html = '<div class="result success">';
+      html += '<h3>✅ Scraping Successful!</h3>';
+
+      if (!isSingleUrl) {
+        html += '<div class="stats">';
+        html += `<div class="stat"><div class="stat-label">Total</div><div class="stat-value">${data.total || 0}</div></div>`;
+        html += `<div class="stat"><div class="stat-label">Success</div><div class="stat-value">${data.count || 0}</div></div>`;
+        html += `<div class="stat"><div class="stat-label">Failed</div><div class="stat-value">${data.failed || 0}</div></div>`;
+        html += `<div class="stat"><div class="stat-label">Duration</div><div class="stat-value">${Math.round((data.duration || 0) / 1000)}s</div></div>`;
+        html += '</div>';
+      }
+
+      html += '<pre class="json-output">' + JSON.stringify(data, null, 2) + '</pre>';
+      html += '</div>';
+
+      resultDiv.innerHTML = html;
+    }
+
+    function showError(message) {
+      resultDiv.innerHTML = `
+        <div class="result error">
+          <h3>❌ Error</h3>
+          <p>${message}</p>
+        </div>
+      `;
+    }
+  </script>
+</body>
+</html>
