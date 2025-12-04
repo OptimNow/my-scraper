@@ -15,8 +15,8 @@ const { JSDOM } = require("jsdom");
 const BASE_URL = "https://hub.pointfive.co";
 
 // Configuration
-const REQUEST_DELAY_MS = 300; // Delay between requests to be polite
-const FETCH_TIMEOUT_MS = 8000; // Timeout for individual fetches
+const REQUEST_DELAY_MS = 0; // No delay for maximum speed (use with caution)
+const FETCH_TIMEOUT_MS = 5000; // Reduced timeout for faster failures
 
 /**
  * Structured logger
