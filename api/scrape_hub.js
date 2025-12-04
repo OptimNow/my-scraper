@@ -14,6 +14,88 @@ const { JSDOM } = require("jsdom");
 
 const BASE_URL = "https://hub.pointfive.co";
 
+// Configuration
+const REQUEST_DELAY_MS = 300; // Delay between requests to be polite
+const FETCH_TIMEOUT_MS = 8000; // Timeout for individual fetches
+
+/**
+ * Structured logger
+ */
+const logger = {
+  info: (msg, meta = {}) => {
+    console.log(JSON.stringify({
+      level: 'info',
+      timestamp: new Date().toISOString(),
+      message: msg,
+      ...meta
+    }));
+  },
+  error: (msg, error = null, meta = {}) => {
+    console.error(JSON.stringify({
+      level: 'error',
+      timestamp: new Date().toISOString(),
+      message: msg,
+      error: error ? {
+        message: error.message,
+        stack: error.stack,
+        name: error.name
+      } : null,
+      ...meta
+    }));
+  },
+  warn: (msg, meta = {}) => {
+    console.warn(JSON.stringify({
+      level: 'warn',
+      timestamp: new Date().toISOString(),
+      message: msg,
+      ...meta
+    }));
+  }
+};
+
+/**
+ * Validate scraped data against expected schema
+ */
+function validateScrapedData(data) {
+  const errors = [];
+
+  if (!data.id || typeof data.id !== 'string') {
+    errors.push('Missing or invalid id');
+  }
+
+  if (!data.title || typeof data.title !== 'string') {
+    errors.push('Missing or invalid title');
+  }
+
+  if (data.source?.url && !data.source.url.startsWith('http')) {
+    errors.push('Invalid source URL format');
+  }
+
+  if (data.documentation_links && Array.isArray(data.documentation_links)) {
+    data.documentation_links.forEach((link, idx) => {
+      if (link.url && !link.url.startsWith('http')) {
+        errors.push(`Invalid documentation link URL at index ${idx}`);
+      }
+    });
+  }
+
+  if (!data.scraped_at || isNaN(Date.parse(data.scraped_at))) {
+    errors.push('Missing or invalid scraped_at timestamp');
+  }
+
+  return {
+    isValid: errors.length === 0,
+    errors
+  };
+}
+
+/**
+ * Sleep utility for adding delays
+ */
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
 // Section titles we expect on detail pages
 const SECTION_TITLES = [
   "Explanation",
@@ -24,23 +106,45 @@ const SECTION_TITLES = [
 ];
 
 /**
- * Fetch HTML and return a JSDOM document.
+ * Fetch HTML with timeout and return a JSDOM document.
  */
 async function fetchDocument(url) {
-  const resp = await fetch(url, {
-    headers: {
-      // You can customize the user agent string if needed
-      "User-Agent": "my-scraper/0.1 (+https://example.com)"
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+
+  try {
+    logger.info('Fetching document', { url });
+
+    const resp = await fetch(url, {
+      signal: controller.signal,
+      headers: {
+        "User-Agent": "my-scraper/1.0 (Cloud Cost Optimization Research)"
+      }
+    });
+
+    clearTimeout(timeoutId);
+
+    if (!resp.ok) {
+      throw new Error(`HTTP ${resp.status} ${resp.statusText}`);
     }
-  });
 
-  if (!resp.ok) {
-    throw new Error(`Failed to fetch ${url}: ${resp.status} ${resp.statusText}`);
+    const html = await resp.text();
+    const dom = new JSDOM(html);
+
+    logger.info('Document fetched successfully', { url, size: html.length });
+    return dom.window.document;
+
+  } catch (error) {
+    clearTimeout(timeoutId);
+
+    if (error.name === 'AbortError') {
+      logger.error('Fetch timeout', error, { url, timeout: FETCH_TIMEOUT_MS });
+      throw new Error(`Fetch timeout after ${FETCH_TIMEOUT_MS}ms: ${url}`);
+    }
+
+    logger.error('Fetch failed', error, { url });
+    throw new Error(`Failed to fetch ${url}: ${error.message}`);
   }
-
-  const html = await resp.text();
-  const dom = new JSDOM(html);
-  return dom.window.document;
 }
 
 /**
@@ -349,7 +453,7 @@ async function parseInefficiencyDetail(url) {
   };
 
   return mapToSchema(record);
-
+}
 
 /**
  * Discover inefficiency URLs from the Hub index page.
@@ -387,42 +491,145 @@ async function extractInefficiencyUrls(limit) {
  * Vercel serverless function handler.
  */
 module.exports = async (req, res) => {
+  const requestId = Math.random().toString(36).substring(7);
+  const startTime = Date.now();
+
   try {
     const requestUrl = new URL(req.url, "http://localhost");
     const urlParam = requestUrl.searchParams.get("url");
     const limitParam = requestUrl.searchParams.get("limit");
 
-    const limit = limitParam ? parseInt(limitParam, 10) : 10; // default: 10 entries for safety
+    const limit = limitParam ? parseInt(limitParam, 10) : 5; // Reduced default for safety
+
+    logger.info('Scraper request started', {
+      requestId,
+      urlParam,
+      limit,
+      singleUrl: !!urlParam
+    });
 
     if (urlParam) {
       // Scrape a single detail page
-      const record = await parseInefficiencyDetail(urlParam);
-      res.setHeader("Content-Type", "application/json");
-      res.status(200).send(JSON.stringify(record, null, 2));
-      return;
+      try {
+        const record = await parseInefficiencyDetail(urlParam);
+
+        const validation = validateScrapedData(record);
+        if (!validation.isValid) {
+          logger.warn('Data validation warnings', {
+            requestId,
+            url: urlParam,
+            errors: validation.errors
+          });
+        }
+
+        logger.info('Single URL scraped successfully', {
+          requestId,
+          url: urlParam,
+          duration: Date.now() - startTime
+        });
+
+        res.setHeader("Content-Type", "application/json");
+        res.status(200).send(JSON.stringify(record, null, 2));
+        return;
+
+      } catch (error) {
+        logger.error('Failed to scrape single URL', error, { requestId, url: urlParam });
+        res.status(500).json({
+          error: "Failed to scrape URL",
+          url: urlParam,
+          details: error.message,
+          requestId
+        });
+        return;
+      }
     }
 
     // Discover inefficiency URLs from the hub index
-    const urls = await extractInefficiencyUrls(limit);
+    let urls;
+    try {
+      urls = await extractInefficiencyUrls(limit);
+      logger.info('URLs discovered', { requestId, count: urls.length, limit });
+    } catch (error) {
+      logger.error('Failed to discover URLs', error, { requestId });
+      res.status(500).json({
+        error: "Failed to discover inefficiency URLs",
+        details: error.message,
+        requestId
+      });
+      return;
+    }
 
     const results = [];
-    for (const url of urls) {
-      // You can add small delay here if you want to be extra polite:
-      // await new Promise(r => setTimeout(r, 200));
+    const errors = [];
 
-      const record = await parseInefficiencyDetail(url);
-      results.push(record);
+    for (let i = 0; i < urls.length; i++) {
+      const url = urls[i];
+
+      // Add polite delay between requests (skip for first request)
+      if (i > 0) {
+        await sleep(REQUEST_DELAY_MS);
+      }
+
+      try {
+        logger.info('Scraping URL', { requestId, index: i + 1, total: urls.length, url });
+
+        const record = await parseInefficiencyDetail(url);
+
+        // Validate data
+        const validation = validateScrapedData(record);
+        if (!validation.isValid) {
+          logger.warn('Data validation warnings', {
+            requestId,
+            url,
+            errors: validation.errors
+          });
+        }
+
+        results.push(record);
+        logger.info('URL scraped successfully', { requestId, index: i + 1, url });
+
+      } catch (error) {
+        logger.error('Failed to scrape URL', error, { requestId, url, index: i + 1 });
+
+        errors.push({
+          url,
+          error: error.message,
+          index: i + 1
+        });
+
+        // Continue with next URL instead of failing completely
+        continue;
+      }
     }
+
+    const duration = Date.now() - startTime;
+
+    logger.info('Scraping batch completed', {
+      requestId,
+      total: urls.length,
+      successful: results.length,
+      failed: errors.length,
+      duration
+    });
 
     res.setHeader("Content-Type", "application/json");
     res.status(200).send(JSON.stringify({
+      requestId,
       count: results.length,
+      total: urls.length,
+      failed: errors.length,
+      duration,
       urls,
-      items: results
+      items: results,
+      errors: errors.length > 0 ? errors : undefined
     }, null, 2));
 
   } catch (err) {
-    console.error("Scraper error:", err);
-    res.status(500).json({ error: "Scrape failed", details: String(err) });
+    logger.error('Unexpected scraper error', err, { requestId });
+    res.status(500).json({
+      error: "Unexpected scraper error",
+      details: err.message,
+      requestId
+    });
   }
 };
