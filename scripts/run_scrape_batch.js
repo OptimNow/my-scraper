@@ -12,11 +12,11 @@
 // Required env vars:
 //    AWS_ACCESS_KEY_ID
 //    AWS_SECRET_ACCESS_KEY
-//    AWS_REGION
+//    S3_BUCKET_NAME         (your S3 bucket name)
 // Optional env vars:
-//    S3_BUCKET_NAME     (default: "optimnow-finops-repo")
-//    S3_PREFIX          (default: "Recos/")
-//    SCRAPER_API_URL    (default: "http://localhost:3000/api/scrape_hub")
+//    AWS_REGION             (default: "eu-central-1")
+//    S3_PREFIX              (default: "Recos/")
+//    SCRAPER_API_URL        (default: "http://localhost:3000/api/scrape_hub")
 
 const AWS = require("aws-sdk");
 
@@ -24,11 +24,83 @@ const AWS = require("aws-sdk");
 const fetchFn = (...args) =>
   import("node-fetch").then(({ default: fetch }) => fetch(...args));
 
-const DEFAULT_BUCKET = "optimnow-finops-repo";
 const DEFAULT_PREFIX = "Recos/";
 const DEFAULT_SCRAPER_URL = "http://localhost:3000/api/scrape_hub";
 
-const BUCKET_NAME = process.env.S3_BUCKET_NAME || DEFAULT_BUCKET;
+/**
+ * Structured logger for batch script
+ */
+const logger = {
+  info: (msg, meta = {}) => {
+    console.log(JSON.stringify({
+      level: 'info',
+      timestamp: new Date().toISOString(),
+      message: msg,
+      ...meta
+    }));
+  },
+  error: (msg, error = null, meta = {}) => {
+    console.error(JSON.stringify({
+      level: 'error',
+      timestamp: new Date().toISOString(),
+      message: msg,
+      error: error ? {
+        message: error.message,
+        stack: error.stack
+      } : null,
+      ...meta
+    }));
+  },
+  warn: (msg, meta = {}) => {
+    console.warn(JSON.stringify({
+      level: 'warn',
+      timestamp: new Date().toISOString(),
+      message: msg,
+      ...meta
+    }));
+  }
+};
+
+/**
+ * Validate required environment variables
+ */
+function validateEnvironment() {
+  const required = ['AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY'];
+  const missing = [];
+
+  for (const envVar of required) {
+    if (!process.env[envVar]) {
+      missing.push(envVar);
+    }
+  }
+
+  if (missing.length > 0) {
+    throw new Error(
+      `Missing required environment variables: ${missing.join(', ')}. ` +
+      'Please set them before running this script.'
+    );
+  }
+
+  // Warn if S3_BUCKET_NAME is not set
+  if (!process.env.S3_BUCKET_NAME) {
+    logger.warn('S3_BUCKET_NAME not set, using default', {
+      bucket: 'optimnow-finops-repo',
+      recommendation: 'Set S3_BUCKET_NAME environment variable for your bucket'
+    });
+  }
+}
+
+// Validate environment before proceeding
+validateEnvironment();
+
+const BUCKET_NAME = process.env.S3_BUCKET_NAME;
+if (!BUCKET_NAME) {
+  throw new Error(
+    'S3_BUCKET_NAME environment variable is required. ' +
+    'Please set it to your S3 bucket name before running this script.'
+  );
+}
+
 const PREFIX = normalizePrefix(process.env.S3_PREFIX || DEFAULT_PREFIX);
 const SCRAPER_API_URL = process.env.SCRAPER_API_URL || DEFAULT_SCRAPER_URL;
 
@@ -38,6 +110,13 @@ AWS.config.update({
 });
 
 const s3 = new AWS.S3();
+
+logger.info('Batch script initialized', {
+  bucket: BUCKET_NAME,
+  prefix: PREFIX,
+  region: process.env.AWS_REGION || "eu-central-1",
+  scraperUrl: SCRAPER_API_URL
+});
 
 // --------------- helpers ---------------
 
@@ -67,26 +146,34 @@ async function fetchScrapedData(limit) {
       ? `${SCRAPER_API_URL}?limit=${limit}`
       : SCRAPER_API_URL;
 
-  console.log(`Calling scraper API: ${url}`);
+  logger.info('Calling scraper API', { url, limit });
 
-  const resp = await fetchFn(url);
-  if (!resp.ok) {
-    const text = await resp.text().catch(() => "");
-    throw new Error(
-      `Scraper API returned HTTP ${resp.status}. Body: ${text.slice(0, 500)}`
-    );
+  try {
+    const resp = await fetchFn(url);
+    if (!resp.ok) {
+      const text = await resp.text().catch(() => "");
+      throw new Error(
+        `Scraper API returned HTTP ${resp.status}. Body: ${text.slice(0, 500)}`
+      );
+    }
+
+    const data = await resp.json();
+    if (!data || !Array.isArray(data.items)) {
+      throw new Error("Scraper API response does not contain an 'items' array");
+    }
+
+    logger.info('Scraper API response received', {
+      itemCount: data.items.length,
+      totalUrls: data.total || data.items.length,
+      failed: data.failed || 0,
+      requestId: data.requestId
+    });
+
+    return data;
+  } catch (error) {
+    logger.error('Failed to fetch scraped data', error, { url });
+    throw error;
   }
-
-  const data = await resp.json();
-  if (!data || !Array.isArray(data.items)) {
-    throw new Error("Scraper API response does not contain an 'items' array");
-  }
-
-  console.log(
-    `Scraper returned ${data.items.length} items (source=${data.source || "n/a"})`
-  );
-
-  return data;
 }
 
 async function uploadToS3(key, bodyObj) {
@@ -99,38 +186,84 @@ async function uploadToS3(key, bodyObj) {
     ContentType: "application/json"
   };
 
-  await s3.putObject(params).promise();
-  console.log(`Uploaded to s3://${BUCKET_NAME}/${key}`);
+  try {
+    await s3.putObject(params).promise();
+    logger.info('File uploaded to S3', {
+      bucket: BUCKET_NAME,
+      key,
+      size: bodyStr.length
+    });
+  } catch (error) {
+    logger.error('Failed to upload to S3', error, { bucket: BUCKET_NAME, key });
+    throw error;
+  }
 }
 
 async function main() {
-  const limit = parseLimitFromArgs();
-  const data = await fetchScrapedData(limit);
+  const startTime = Date.now();
 
-  const ts = timestampSlug();
+  try {
+    const limit = parseLimitFromArgs();
+    logger.info('Starting batch process', { limit });
 
-  // 1) Summary file with all items
-  const summaryKey = `${PREFIX}pointfive_hub_summary_${ts}.json`;
-  await uploadToS3(summaryKey, data);
+    const data = await fetchScrapedData(limit);
 
-  // 2) Individual files per item
-  let index = 0;
-  for (const item of data.items) {
-    index += 1;
-    const idPart = item.id && String(item.id).trim()
-      ? item.id.trim()
-      : `item-${index}`;
-    const itemKey = `${PREFIX}pointfive_${idPart}_${ts}.json`;
-    await uploadToS3(itemKey, item);
+    const ts = timestampSlug();
+
+    // 1) Summary file with all items
+    logger.info('Uploading summary file');
+    const summaryKey = `${PREFIX}pointfive_hub_summary_${ts}.json`;
+    await uploadToS3(summaryKey, data);
+
+    // 2) Individual files per item
+    logger.info('Uploading individual files', { count: data.items.length });
+    let index = 0;
+    let uploadedCount = 0;
+    let failedCount = 0;
+
+    for (const item of data.items) {
+      index += 1;
+      const idPart = item.id && String(item.id).trim()
+        ? item.id.trim()
+        : `item-${index}`;
+      const itemKey = `${PREFIX}pointfive_${idPart}_${ts}.json`;
+
+      try {
+        await uploadToS3(itemKey, item);
+        uploadedCount++;
+      } catch (error) {
+        failedCount++;
+        logger.error('Failed to upload individual file', error, { index, id: item.id });
+        // Continue with other files
+      }
+    }
+
+    const duration = Date.now() - startTime;
+
+    logger.info('Batch upload completed', {
+      totalItems: data.items.length,
+      uploaded: uploadedCount + 1, // +1 for summary
+      failed: failedCount,
+      duration,
+      bucket: BUCKET_NAME,
+      prefix: PREFIX
+    });
+
+    if (failedCount > 0) {
+      logger.warn('Some files failed to upload', { failedCount });
+      process.exit(1);
+    }
+
+  } catch (error) {
+    logger.error('Batch process failed', error);
+    throw error;
   }
-
-  console.log("Batch upload completed.");
 }
 
 // --------------- run ---------------
 
 main().catch(err => {
-  console.error("Batch scraping and upload failed:", err);
+  logger.error("Batch scraping and upload failed", err);
   process.exit(1);
 });
 
